@@ -186,6 +186,7 @@ namespace reshade
 		std::vector<uniform> _uniforms;
 		std::vector<technique> _techniques;
 		std::vector<unsigned char> _uniform_data_storage;
+		static unsigned int s_vr_system_ref_count;
 
 	private:
 		/// <summary>
@@ -254,6 +255,9 @@ namespace reshade
 
 		void get_uniform_value(const uniform &variable, uint8_t *data, size_t size) const;
 		void set_uniform_value(uniform &variable, const uint8_t *data, size_t size);
+
+		void init_vr_system();
+		void shutdown_vr_system();
 
 		bool _needs_update = false;
 		unsigned long _latest_version[3] = {};
@@ -347,6 +351,7 @@ namespace reshade
 		bool _rebuild_font_atlas = false;
 		bool _was_preprocessor_popup_edited = false;
 		bool _statistics_effects_show_enabled = false;
+		bool _is_vr_enabled = false;
 		float _fps_col[4] = { 1.0f, 1.0f, 0.784314f, 1.0f };
 		float _fps_scale = 1.0f;
 		float _variable_editor_height = 0.0f;

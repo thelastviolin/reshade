@@ -16,3 +16,6 @@
 [submodule "spirv"]
 	path = deps/spirv
 	url = https://github.com/KhronosGroup/SPIRV-Headers/
+[submodule "openvr"]
+	path = deps/openvr
+	url = https://github.com/ValveSoftware/openvr.git

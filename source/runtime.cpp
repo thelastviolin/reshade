@@ -19,6 +19,7 @@
 #include <stb_image_dds.h>
 #include <stb_image_write.h>
 #include <stb_image_resize.h>
+#include <openvr.h>
 
 extern volatile long g_network_traffic;
 extern std::filesystem::path g_reshade_dll_path;
@@ -95,15 +96,20 @@ reshade::runtime::runtime() :
 	init_ui();
 #endif
 	load_config();
+
+	init_vr_system();
 }
 reshade::runtime::~runtime()
 {
 #if RESHADE_GUI
 	deinit_ui();
 #endif
+	shutdown_vr_system();
 
 	assert(!_is_initialized && _techniques.empty());
 }
+
+unsigned int reshade::runtime::s_vr_system_ref_count = 0;
 
 bool reshade::runtime::on_init(input::window_handle window)
 {
@@ -840,6 +846,8 @@ void reshade::runtime::load_config()
 	config.get("GENERAL", "ScreenshotIncludePreset", _screenshot_include_preset);
 	config.get("GENERAL", "NoReloadOnInit", _no_reload_on_init);
 
+	config.get("VR", "Enabled", _is_vr_enabled);
+
 	// Create a default preset file if none exists yet
 	if (_current_preset_path.empty())
 		_current_preset_path = g_reshade_dll_path.parent_path() / "DefaultPreset.ini";
@@ -868,6 +876,8 @@ void reshade::runtime::save_config(const std::filesystem::path &path) const
 	config.set("GENERAL", "ScreenshotFormat", _screenshot_format);
 	config.set("GENERAL", "ScreenshotIncludePreset", _screenshot_include_preset);
 	config.set("GENERAL", "NoReloadOnInit", _no_reload_on_init);
+
+	config.set("VR", "Enabled", _is_vr_enabled);
 
 	for (const auto &callback : _save_config_callables)
 		callback(config);
@@ -1231,5 +1241,30 @@ void reshade::runtime::reset_uniform_value(uniform &variable)
 			reinterpret_cast<float *>(_uniform_data_storage.data() + variable.storage_offset)[i] = variable.initializer_value.as_float[i];
 			break;
 		}
+	}
+}
+
+void reshade::runtime::init_vr_system()
+{
+	if (_is_vr_enabled && s_vr_system_ref_count++ == 0) 
+	{
+		vr::EVRInitError e = vr::VRInitError_None;
+
+		vr::VR_Init(&e, vr::EVRApplicationType::VrApplication_Scene);
+
+		if (e != vr::VRInitError_None || !vr::VRCompositor())
+		{
+			s_vr_system_ref_count = 0;
+
+			LOG(ERROR) << "Failed to initialize VR system with error code " << e << ".";
+		}
+	}
+}
+
+void reshade::runtime::shutdown_vr_system() 
+{
+	if (s_vr_system_ref_count && --s_vr_system_ref_count == 0)
+	{
+		vr::VR_Shutdown();
 	}
 }

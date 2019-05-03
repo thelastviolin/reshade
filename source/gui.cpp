@@ -1027,6 +1027,21 @@ void reshade::runtime::draw_overlay_menu_settings()
 		modified |= ImGui::ColorEdit4("FPS Text Color", _fps_col, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreview);
 	}
 
+	if (ImGui::CollapsingHeader("Virtual Reality", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[_is_vr_enabled ? ImGuiCol_ButtonActive : ImGuiCol_Button]);
+
+		if (ImGui::Checkbox("Enable", &_is_vr_enabled))
+		{
+			if (_is_vr_enabled)
+				init_vr_system();
+			else
+				shutdown_vr_system();
+
+			modified = true;
+		}
+	}
+
 	if (modified)
 		save_config();
 	if (reload_style) // Style is applied in "load_config()".

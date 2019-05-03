@@ -227,6 +227,24 @@ void reshade::opengl::runtime_opengl::on_present()
 
 	runtime::on_present();
 
+	// Present image to VR headset
+	if (runtime::s_vr_system_ref_count) 
+	{
+		const vr::Texture_t submit_textures[2] = {
+				{ reinterpret_cast<void *>(static_cast<uintptr_t>(_rbo[0])), vr::TextureType_OpenGL, vr::ColorSpace_Gamma },
+				{ reinterpret_cast<void *>(static_cast<uintptr_t>(_rbo[0])), vr::TextureType_OpenGL, vr::ColorSpace_Gamma }
+			};
+			const vr::VRTextureBounds_t submit_bounds[2] = {
+				{ 0.0f, 0.0f, 0.5f, 1.0f },
+				{ 0.5f, 0.0f, 1.0f, 1.0f }
+			};
+
+			vr::VRCompositor()->Submit(vr::Eye_Left, &submit_textures[0], &submit_bounds[0], vr::Submit_GlRenderBuffer);
+			vr::VRCompositor()->Submit(vr::Eye_Right, &submit_textures[1], &submit_bounds[1], vr::Submit_GlRenderBuffer);
+
+			vr::VRCompositor()->PostPresentHandoff();
+	}
+
 	// Apply previous state from application
 	_app_state.apply();
 }

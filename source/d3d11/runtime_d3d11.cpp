@@ -11,6 +11,7 @@
 #include "dxgi/format_utils.hpp"
 #include <imgui.h>
 #include <d3dcompiler.h>
+#include <openvr.h>
 
 namespace reshade::d3d11
 {
@@ -323,6 +324,24 @@ void reshade::d3d11::runtime_d3d11::on_present(draw_call_tracker &tracker)
 
 	update_and_render_effects();
 	runtime::on_present();
+
+	// Present image to VR headset
+	if (runtime::s_vr_system_ref_count)
+	{
+		const vr::Texture_t submit_textures[2] = {
+			{ _backbuffer_resolved.get(), vr::TextureType_DirectX, vr::ColorSpace_Gamma },
+			{ _backbuffer_resolved.get(), vr::TextureType_DirectX, vr::ColorSpace_Gamma }
+		};
+		const vr::VRTextureBounds_t submit_bounds[2] = {
+			{ 0.0f, 0.0f, 0.5f, 1.0f },
+			{ 0.5f, 0.0f, 1.0f, 1.0f }
+		};
+
+		vr::VRCompositor()->Submit(vr::EyeLeft, &submit_textures[0], &submit_bounds[0], vr::Submit_Default);
+		vr::VRCompositor()->Submit(vr::EyeRight, &Submit_textures[1], &submit_bounds[1], vr::Submit_Default);
+
+		vr::VRCompositor()->PostPresentHandoff();
+	}
 
 	// Stretch main render target back into MSAA back buffer if MSAA is active
 	if (_backbuffer_resolved != _backbuffer)
