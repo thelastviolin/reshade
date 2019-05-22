@@ -258,6 +258,8 @@ namespace reshade
 
 		void init_vr_system();
 		void shutdown_vr_system();
+		void set_current_preset();
+		void set_current_preset(std::filesystem::path path);
 
 		bool _needs_update = false;
 		unsigned long _latest_version[3] = {};
@@ -360,6 +362,11 @@ namespace reshade
 		char _effect_filter_buffer[64] = {};
 		std::filesystem::path _file_selection_path;
 		imgui_code_editor _editor;
+
+		// used by preset explorer
+		bool _browse_path_is_input_mode = false;
+		bool _current_preset_is_covered = true;
+		std::filesystem::path _current_browse_path;
 #endif
 	};
 }
