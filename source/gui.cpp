@@ -213,6 +213,7 @@ void reshade::runtime::init_ui()
 		config.set("GENERAL", "ShowFrameTime", _show_frametime);
 		config.set("GENERAL", "ShowScreenshotMessage", _show_screenshot_message);
 		config.set("GENERAL", "ClockFormat", _clock_format);
+		config.set("GENERAL", "NoFontScaling", _no_font_scaling);
 		config.set("GENERAL", "SaveWindowState", _imgui_context->IO.IniFilename != nullptr);
 		config.set("GENERAL", "TutorialProgress", _tutorial_index);
 		config.set("GENERAL", "NewVariableUI", _variable_editor_tabs);
@@ -699,29 +700,20 @@ void reshade::runtime::draw_overlay_menu_home()
 					}
 				}
 			}
-			for (auto i = _techniques.begin(); i != _techniques.end(); ++i)
+
+			if (const auto it = std::find_if_not(_techniques.begin(), _techniques.end(), [](const reshade::technique &a) {
+					return a.enabled || a.toggle_key_data[0] != 0;
+				}); it != _techniques.end())
 			{
-				if (!i->enabled && i->toggle_key_data[0] == 0)
-				{
-					for (auto k = i + 1; k != _techniques.end(); ++k)
-					{
-						if (!k->enabled && k->toggle_key_data[0] == 0)
-						{
-							// Using static to avoid allocate std::string in loop
-							static const std::string ui_label("ui_label");
-
-							const auto &a = i->annotations.find(ui_label) == i->annotations.end() ? i->name : i->annotations[ui_label].second.string_data;
-							const auto &b = k->annotations.find(ui_label) == k->annotations.end() ? k->name : k->annotations[ui_label].second.string_data;
-
-							if (a.compare(b) > 0)
-							{
-								std::iter_swap(i, k);
-								i = _techniques.begin();
-								break;
-							}
-						}
-					}
-				}
+				std::stable_sort(it, _techniques.end(), [](const reshade::technique &lhs, const reshade::technique &rhs) {
+						std::string lhs_label(lhs.annotation_as_string("ui_label"));
+						if (lhs_label.empty()) lhs_label = lhs.name;
+						std::transform(lhs_label.begin(), lhs_label.end(), lhs_label.begin(), tolower);
+						std::string rhs_label(rhs.annotation_as_string("ui_label"));
+						if (rhs_label.empty()) rhs_label = rhs.name;
+						std::transform(rhs_label.begin(), rhs_label.end(), rhs_label.begin(), tolower);
+						return lhs_label < rhs_label;
+					});
 			}
 
 			save_current_preset();
@@ -820,7 +812,9 @@ void reshade::runtime::draw_overlay_menu_home()
 		if ((_tutorial_index != 1 || !_current_preset_path.empty()) &&
 			ImGui::Button(_tutorial_index == 3 ? "Finish" : "Continue", ImVec2(ImGui::GetContentRegionAvailWidth(), 0)))
 		{
-			_tutorial_index++;
+			// Disable font scaling after tutorial
+			if (_tutorial_index++ == 3)
+				_no_font_scaling = true;
 
 			save_config();
 		}
@@ -1126,14 +1120,24 @@ void reshade::runtime::draw_overlay_menu_statistics()
 			const float button_spacing = _imgui_context->Style.ItemInnerSpacing.x;
 			const float button_offset = ImGui::GetWindowContentRegionWidth() - (50 + button_spacing + 120);
 
+			auto tree_id = ImGui::GetID("tree_open");
+			bool tree_open = ImGui::GetStateStorage()->GetInt(tree_id, true);
+			bool tree_toggle = false;
+
 			// Hide parent path if window is small
 			if (ImGui::CalcTextSize(effect.source_file.u8string().c_str()).x < button_offset)
 			{
 				ImGui::TextDisabled("%s%lc", effect.source_file.parent_path().u8string().c_str(), std::filesystem::path::preferred_separator);
+				tree_toggle = ImGui::IsItemClicked();
 				ImGui::SameLine(0, 0);
 			}
 
 			ImGui::TextUnformatted(effect.source_file.filename().u8string().c_str());
+			tree_toggle |= ImGui::IsItemClicked();
+
+			// Update tree state
+			if (tree_toggle)
+				ImGui::GetStateStorage()->SetInt(tree_id, tree_open = !tree_open);
 
 			ImGui::SameLine(button_offset + _imgui_context->Style.ItemSpacing.x, 0);
 			if (ImGui::Button("Edit", ImVec2(50, 0)))
@@ -1164,109 +1168,112 @@ void reshade::runtime::draw_overlay_menu_statistics()
 				}
 			}
 
-			if (!effect.errors.empty())
+			if (tree_open)
 			{
-				ImGui::PushStyleColor(ImGuiCol_Text, effect.errors.find("error") != std::string::npos ? COLOR_RED : COLOR_YELLOW);
-				ImGui::PushTextWrapPos();
-				ImGui::TextUnformatted(effect.errors.c_str());
-				ImGui::PopTextWrapPos();
-				ImGui::PopStyleColor();
-				ImGui::Spacing();
-			}
-
-			#pragma region Techniques
-			current_techniques.clear();
-			for (const auto &technique : _techniques)
-				if (technique.effect_index == index && technique.impl != nullptr)
-					current_techniques.push_back(&technique);
-
-			if (!current_techniques.empty())
-			{
-				if (ImGui::BeginChild("Techniques", ImVec2(0, current_techniques.size() * ImGui::GetTextLineHeightWithSpacing() + _imgui_context->Style.FramePadding.y * 4), true, ImGuiWindowFlags_NoScrollWithMouse))
+				if (!effect.errors.empty())
 				{
-					ImGui::BeginGroup();
+					ImGui::PushStyleColor(ImGuiCol_Text, effect.errors.find("error") != std::string::npos ? COLOR_RED : COLOR_YELLOW);
+					ImGui::PushTextWrapPos();
+					ImGui::TextUnformatted(effect.errors.c_str());
+					ImGui::PopTextWrapPos();
+					ImGui::PopStyleColor();
+					ImGui::Spacing();
+				}
 
-					for (const auto &technique : current_techniques)
-					{
-						ImGui::PushStyleColor(ImGuiCol_Text, _imgui_context->Style.Colors[technique->enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled]);
+				#pragma region Techniques
+				current_techniques.clear();
+				for (const auto &technique : _techniques)
+					if (technique.effect_index == index && technique.impl != nullptr)
+						current_techniques.push_back(&technique);
 
-						if (technique->passes.size() > 1)
-							ImGui::Text("%s (%zu passes)", technique->name.c_str(), technique->passes.size());
-						else
-							ImGui::TextUnformatted(technique->name.c_str());
-
-						ImGui::PopStyleColor();
-					}
-
-					ImGui::EndGroup();
-					ImGui::SameLine(ImGui::GetWindowWidth() * 0.33333333f);
-					ImGui::BeginGroup();
-
-					for (const technique *technique : current_techniques)
-						if (technique->enabled)
-							ImGui::Text("%f ms (CPU) (%.0f%%)", technique->average_cpu_duration * 1e-6f, 100 * (technique->average_cpu_duration * 1e-6f) / (post_processing_time_cpu * 1e-6f));
-						else
-							ImGui::NewLine();
-
-					ImGui::EndGroup();
-					ImGui::SameLine(ImGui::GetWindowWidth() * 0.66666666f);
-					ImGui::BeginGroup();
-
-					for (const technique *technique : current_techniques)
-						if (technique->enabled && technique->average_gpu_duration != 0)
-							ImGui::Text("%f ms (GPU) (%.0f%%)", technique->average_gpu_duration * 1e-6f, 100 * (technique->average_gpu_duration * 1e-6f) / (post_processing_time_gpu * 1e-6f));
-						else
-							ImGui::NewLine();
-
-					ImGui::EndGroup();
-				} ImGui::EndChild();
-			}
-			#pragma endregion
-
-			#pragma region Textures
-			current_textures.clear();
-			for (const auto &texture : _textures)
-				if (texture.effect_index == index && texture.impl != nullptr && texture.impl_reference == texture_reference::none)
-					current_textures.push_back(&texture);
-
-			if (!current_textures.empty())
-			{
-				if (ImGui::BeginChild("Textures", ImVec2(0, current_textures.size() * ImGui::GetTextLineHeightWithSpacing() + _imgui_context->Style.FramePadding.y * 4), true, ImGuiWindowFlags_NoScrollWithMouse))
+				if (!current_techniques.empty())
 				{
-					const char *texture_formats[] = {
-						"unknown",
-						"R8", "R16F", "R32F", "RG8", "RG16", "RG16F", "RG32F", "RGBA8", "RGBA16", "RGBA16F", "RGBA32F",
-						"DXT1", "DXT3", "DXT5", "LATC1", "LATC2"
-					};
-
-					static_assert(_countof(texture_formats) - 1 == static_cast<unsigned int>(reshadefx::texture_format::latc2));
-
-					for (const texture *texture : current_textures)
+					if (ImGui::BeginChild("Techniques", ImVec2(0, current_techniques.size() * ImGui::GetTextLineHeightWithSpacing() + _imgui_context->Style.FramePadding.y * 4), true, ImGuiWindowFlags_NoScrollWithMouse))
 					{
-						ImGui::Text("%s (%ux%u +%u %s)", texture->unique_name.c_str(), texture->width, texture->height, (texture->levels - 1), texture_formats[static_cast<unsigned int>(texture->format)]);
+						ImGui::BeginGroup();
 
-						if (std::find(_texture_previews.begin(), _texture_previews.end(), texture) != _texture_previews.end())
-							continue;
+						for (const auto &technique : current_techniques)
+						{
+							ImGui::PushStyleColor(ImGuiCol_Text, _imgui_context->Style.Colors[technique->enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled]);
 
-						if (ImGui::IsItemClicked())
-						{
-							_texture_previews.push_back(texture);
-						}
-						else if (ImGui::IsItemHovered())
-						{
-							ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-							ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-							ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(204, 204, 204, 255));
-							ImGui::BeginTooltip();
-							imgui_image_with_checkerboard_background(texture->impl.get(), ImVec2(std::max(texture->width * 0.5f, 500.0f), std::max(texture->height * 0.5f, texture->height * 500.0f / texture->width)));
-							ImGui::EndTooltip();
+							if (technique->passes.size() > 1)
+								ImGui::Text("%s (%zu passes)", technique->name.c_str(), technique->passes.size());
+							else
+								ImGui::TextUnformatted(technique->name.c_str());
+
 							ImGui::PopStyleColor();
-							ImGui::PopStyleVar(2);
 						}
-					}
-				} ImGui::EndChild();
+
+						ImGui::EndGroup();
+						ImGui::SameLine(ImGui::GetWindowWidth() * 0.33333333f);
+						ImGui::BeginGroup();
+
+						for (const technique *technique : current_techniques)
+							if (technique->enabled)
+								ImGui::Text("%f ms (CPU) (%.0f%%)", technique->average_cpu_duration * 1e-6f, 100 * (technique->average_cpu_duration * 1e-6f) / (post_processing_time_cpu * 1e-6f));
+							else
+								ImGui::NewLine();
+
+						ImGui::EndGroup();
+						ImGui::SameLine(ImGui::GetWindowWidth() * 0.66666666f);
+						ImGui::BeginGroup();
+
+						for (const technique *technique : current_techniques)
+							if (technique->enabled && technique->average_gpu_duration != 0)
+								ImGui::Text("%f ms (GPU) (%.0f%%)", technique->average_gpu_duration * 1e-6f, 100 * (technique->average_gpu_duration * 1e-6f) / (post_processing_time_gpu * 1e-6f));
+							else
+								ImGui::NewLine();
+
+						ImGui::EndGroup();
+					} ImGui::EndChild();
+				}
+				#pragma endregion
+
+				#pragma region Textures
+				current_textures.clear();
+				for (const auto &texture : _textures)
+					if (texture.effect_index == index && texture.impl != nullptr && texture.impl_reference == texture_reference::none)
+						current_textures.push_back(&texture);
+
+				if (!current_textures.empty())
+				{
+					if (ImGui::BeginChild("Textures", ImVec2(0, current_textures.size() * ImGui::GetTextLineHeightWithSpacing() + _imgui_context->Style.FramePadding.y * 4), true, ImGuiWindowFlags_NoScrollWithMouse))
+					{
+						const char *texture_formats[] = {
+							"unknown",
+							"R8", "R16F", "R32F", "RG8", "RG16", "RG16F", "RG32F", "RGBA8", "RGBA16", "RGBA16F", "RGBA32F",
+							"DXT1", "DXT3", "DXT5", "LATC1", "LATC2"
+						};
+
+						static_assert(_countof(texture_formats) - 1 == static_cast<unsigned int>(reshadefx::texture_format::latc2));
+
+						for (const texture *texture : current_textures)
+						{
+							ImGui::Text("%s (%ux%u +%u %s)", texture->unique_name.c_str(), texture->width, texture->height, (texture->levels - 1), texture_formats[static_cast<unsigned int>(texture->format)]);
+
+							if (std::find(_texture_previews.begin(), _texture_previews.end(), texture) != _texture_previews.end())
+								continue;
+
+							if (ImGui::IsItemClicked())
+							{
+								_texture_previews.push_back(texture);
+							}
+							else if (ImGui::IsItemHovered())
+							{
+								ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+								ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+								ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(204, 204, 204, 255));
+								ImGui::BeginTooltip();
+								imgui_image_with_checkerboard_background(texture->impl.get(), ImVec2(std::max(texture->width * 0.5f, 500.0f), std::max(texture->height * 0.5f, texture->height * 500.0f / texture->width)));
+								ImGui::EndTooltip();
+								ImGui::PopStyleColor();
+								ImGui::PopStyleVar(2);
+							}
+						}
+					} ImGui::EndChild();
+				}
+				#pragma endregion
 			}
-			#pragma endregion
 
 			ImGui::PopID();
 
@@ -1788,7 +1795,9 @@ void reshade::runtime::draw_overlay_variable_editor()
 			if (ui_type == "slider")
 				modified = imgui_slider_with_buttons(label.data(), variable.type.is_signed() ? ImGuiDataType_S32 : ImGuiDataType_U32, data, variable.type.rows, &ui_stp_val, &ui_min_val, &ui_max_val);
 			else if (ui_type == "drag")
-				modified = ImGui::DragScalarN(label.data(), variable.type.is_signed() ? ImGuiDataType_S32 : ImGuiDataType_U32, data, variable.type.rows, static_cast<float>(ui_stp_val), &ui_min_val, &ui_max_val);
+				modified = variable.annotations.find("ui_step") == variable.annotations.end() ?
+					ImGui::DragScalarN(label.data(), variable.type.is_signed() ? ImGuiDataType_S32 : ImGuiDataType_U32, data, variable.type.rows, 1.0f, &ui_min_val, &ui_max_val) :
+					imgui_drag_with_buttons(label.data(), variable.type.is_signed() ? ImGuiDataType_S32 : ImGuiDataType_U32, data, variable.type.rows, &ui_stp_val, &ui_min_val, &ui_max_val);
 			else if (ui_type == "list")
 				modified = imgui_list_with_buttons(label.data(), variable.annotation_as_string("ui_items"), data[0]);
 			else if (ui_type == "combo") {
@@ -1821,10 +1830,17 @@ void reshade::runtime::draw_overlay_variable_editor()
 			const auto ui_max_val = variable.annotation_as_float("ui_max");
 			const auto ui_stp_val = std::max(0.001f, variable.annotation_as_float("ui_step"));
 
+			// Calculate display precision based on step value
+			char precision_format[] = "%.0f";
+			for (float x = ui_stp_val; x < 1.0f && precision_format[2] < '9'; x *= 10.0f)
+				++precision_format[2]; // This changes the text to "%.1f", "%.2f", "%.3f", ...
+
 			if (ui_type == "slider")
-				modified = imgui_slider_with_buttons(label.data(), ImGuiDataType_Float, data, variable.type.rows, &ui_stp_val, &ui_min_val, &ui_max_val, "%.3f");
+				modified = imgui_slider_with_buttons(label.data(), ImGuiDataType_Float, data, variable.type.rows, &ui_stp_val, &ui_min_val, &ui_max_val, precision_format);
 			else if (ui_type == "drag")
-				modified = ImGui::DragScalarN(label.data(), ImGuiDataType_Float, data, variable.type.rows, ui_stp_val, &ui_min_val, &ui_max_val, "%.3f");
+				modified = variable.annotations.find("ui_step") == variable.annotations.end() ?
+					ImGui::DragScalarN(label.data(), ImGuiDataType_Float, data, variable.type.rows, ui_stp_val, &ui_min_val, &ui_max_val, precision_format) :
+					imgui_drag_with_buttons(label.data(), ImGuiDataType_Float, data, variable.type.rows, &ui_stp_val, &ui_min_val, &ui_max_val, precision_format);
 			else if (ui_type == "color" && variable.type.rows == 1)
 				modified = imgui_slider_for_alpha(label.data(), data);
 			else if (ui_type == "color" && variable.type.rows == 3)
@@ -1935,9 +1951,15 @@ void reshade::runtime::draw_overlay_technique_editor()
 			hovered_technique_index = index;
 
 		// Display tooltip
-		if (const std::string_view tooltip = technique.annotation_as_string("ui_tooltip");
+		if (const std::string_view tooltip = compile_success ? technique.annotation_as_string("ui_tooltip") : _loaded_effects[technique.effect_index].errors;
 			!tooltip.empty() && ImGui::IsItemHovered())
-			ImGui::SetTooltip("%s", tooltip.data());
+		{
+			ImGui::BeginTooltip();
+			if (!compile_success) ImGui::PushStyleColor(ImGuiCol_Text, COLOR_RED);
+			ImGui::TextUnformatted(tooltip.data());
+			if (!compile_success) ImGui::PopStyleColor();
+			ImGui::EndTooltip();
+		}
 
 		// Create context menu
 		if (ImGui::BeginPopupContextItem("##context"))
@@ -2013,155 +2035,267 @@ void reshade::runtime::draw_overlay_technique_editor()
 
 void reshade::runtime::draw_preset_explorer()
 {
+	static const std::filesystem::path reshade_container_path = g_reshade_dll_path.parent_path();
 	const ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
 	const float button_size = ImGui::GetFrameHeight();
 	const float button_spacing = _imgui_context->Style.ItemInnerSpacing.x;
 	const float root_window_width = ImGui::GetWindowContentRegionWidth();
 
-	enum class condition { none, select, add, create };
-	condition condition = condition::none;
+	std::error_code ec;
+
+	enum class condition { pass, select, popup_add, create, backward, forward, reload, cancel };
+	condition condition = condition::pass;
+
+	if (ImGui::ButtonEx("<", ImVec2(button_size, 0), ImGuiButtonFlags_NoNavFocus))
+		condition = condition::backward, _current_browse_path = _current_preset_path;
+
+	if (ImGui::SameLine(0, button_spacing);
+		ImGui::ButtonEx(">", ImVec2(button_size, 0), ImGuiButtonFlags_NoNavFocus))
+		condition = condition::forward, _current_browse_path = _current_preset_path;
 
 	ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
-	if (ImGui::ButtonEx(_current_preset_path.u8string().c_str(), ImVec2(root_window_width - button_spacing - button_size, 0)))
-		_file_selection_path = _current_preset_path, ImGui::OpenPopup("##explore");
+	if (ImGui::SameLine(0, button_spacing);
+		ImGui::ButtonEx(_current_preset_path.stem().u8string().c_str(), ImVec2(root_window_width - (button_spacing + button_size) * 3, 0), ImGuiButtonFlags_NoNavFocus))
+		if (ImGui::OpenPopup("##explore"), _imgui_context->IO.KeyCtrl)
+			_browse_path_is_input_mode = true;
 	ImGui::PopStyleVar();
 
-	if (ImGui::SameLine(0, button_spacing); ImGui::Button("+", ImVec2(button_size, 0)))
-		_file_selection_path = _current_preset_path.parent_path(), condition = condition::add;
+	if (ImGui::SameLine(0, button_spacing); ImGui::ButtonEx("+", ImVec2(button_size, 0), ImGuiButtonFlags_PressedOnClick | ImGuiButtonFlags_NoNavFocus))
+		condition = condition::popup_add, _current_browse_path = _current_preset_path.parent_path();
 
 	ImGui::SetNextWindowPos(cursor_pos - _imgui_context->Style.WindowPadding);
-	const bool popup_visible = ImGui::BeginPopup("##explore");
-	if (popup_visible)
+	const bool is_explore_open = ImGui::BeginPopup("##explore");
+	if (is_explore_open)
 	{
-		char buf[_MAX_PATH]{};
+		if (ImGui::ButtonEx("<", ImVec2(button_size, 0), ImGuiButtonFlags_NoNavFocus))
+			condition = condition::backward, _current_browse_path = _current_preset_path;
 
-		if (!_file_selection_path.empty())
-			_file_selection_path.u8string().copy(buf, sizeof(buf) - 1);
+		if (ImGui::SameLine(0, button_spacing);
+			ImGui::ButtonEx(">", ImVec2(button_size, 0), ImGuiButtonFlags_NoNavFocus))
+			condition = condition::forward, _current_browse_path = _current_preset_path;
 
-		ImGui::PushItemWidth(root_window_width - button_spacing - button_size);
-		ImGui::InputText("##path", buf, sizeof(buf));
-		_file_selection_path = std::filesystem::u8path(buf);
-		ImGui::PopItemWidth();
-
-		if (_file_selection_path.is_relative())
-			_file_selection_path = g_reshade_dll_path.parent_path() / _file_selection_path;
-
-		if (!_file_selection_path.has_filename())
-			_file_selection_path = _file_selection_path.parent_path();
-
-		if (ImGui::IsKeyPressedMap(ImGuiKey_Enter))
+		ImGui::SameLine(0, button_spacing);
+		if (_browse_path_is_input_mode)
 		{
-			if (std::filesystem::file_type file_type = std::filesystem::status(_file_selection_path).type();
-				file_type == std::filesystem::file_type::directory)
-				condition = condition::add;
+			char buf[_MAX_PATH]{};
+			_current_browse_path.u8string().copy(buf, sizeof(buf) - 1);
+
+			const bool is_edited = ImGui::InputTextEx("##path", buf, sizeof(buf), ImVec2(root_window_width - (button_spacing + button_size) * 3, 0), ImGuiInputTextFlags_None);
+			const bool is_returned = ImGui::IsKeyPressedMap(ImGuiKey_Enter);
+
+			if (ImGui::IsWindowAppearing())
+				ImGui::SetKeyboardFocusHere();
+			else if (!ImGui::IsItemActive())
+				_browse_path_is_input_mode = false;
+
+			if (is_edited || is_returned)
+			{
+				std::filesystem::path input_preset_path = std::filesystem::u8path(buf);
+				std::filesystem::file_type file_type = std::filesystem::status(reshade_container_path / input_preset_path, ec).type();
+
+				if (is_edited && ec.value() != 0x7b) // 0x7b: ERROR_INVALID_NAME
+					_current_browse_path = std::move(input_preset_path);
+
+				if (is_returned)
+				{
+					if (_current_browse_path.empty())
+						condition = condition::cancel;
+					else if (ec.value() == 0x7b) // 0x7b: ERROR_INVALID_NAME
+						condition = condition::pass;
+					else if (file_type == std::filesystem::file_type::directory)
+						condition = condition::popup_add;
+					else
+					{
+						if (_current_browse_path.has_filename())
+							if (const std::wstring extension(_current_browse_path.extension()); extension != L".ini" && extension != L".txt")
+								_current_browse_path += L".ini",
+								file_type = std::filesystem::status(reshade_container_path / _current_browse_path, ec).type();
+
+						if (ec.value() == 0x7b) // 0x7b: ERROR_INVALID_NAME
+							condition = condition::pass;
+						else if (file_type == std::filesystem::file_type::directory)
+							condition = condition::popup_add;
+						else if (file_type == std::filesystem::file_type::not_found)
+							if (_current_browse_path.has_filename())
+								condition = condition::create;
+							else
+								condition = condition::popup_add;
+						else
+							condition = condition::select;
+					}
+				}
+			}
+		}
+		else
+		{
+			ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
+			if (ImGui::ButtonEx(_current_preset_path.stem().u8string().c_str(), ImVec2(root_window_width - (button_spacing + button_size) * 3, 0), ImGuiButtonFlags_NoNavFocus))
+				if (_imgui_context->IO.KeyCtrl)
+					ImGui::ActivateItem(ImGui::GetID("##path")), _browse_path_is_input_mode = true;
+				else
+					condition = condition::cancel;
+			else if (ImGui::IsKeyPressedMap(ImGuiKey_Enter))
+				condition = condition::reload, _current_browse_path = _current_preset_path;
+			ImGui::PopStyleVar();
+		}
+	}
+
+	if (is_explore_open || condition == condition::backward || condition == condition::forward)
+	{
+		std::filesystem::path preset_container_path = std::filesystem::absolute(reshade_container_path / _current_browse_path);
+		if (!std::filesystem::is_directory(preset_container_path, ec) && preset_container_path.has_filename())
+			preset_container_path = preset_container_path.parent_path();
+
+		std::vector<std::filesystem::directory_entry> preset_container;
+		for (const auto &entry : std::filesystem::directory_iterator(preset_container_path, std::filesystem::directory_options::skip_permission_denied, ec))
+			preset_container.push_back(entry);
+
+		if (condition == condition::backward || condition == condition::forward)
+		{
+			std::vector<std::filesystem::directory_entry> preset_paths;
+			for (const auto &entry : preset_container)
+				if (!entry.is_directory())
+					if (const std::wstring extension(entry.path().extension()); extension == L".ini" || extension == L".txt")
+						if (const reshade::ini_file preset(entry); preset.has("", "TechniqueSorting"))
+							preset_paths.push_back(entry);
+
+			if (preset_paths.begin() == preset_paths.end())
+				condition = condition::pass;
 			else
 			{
-				if (const std::string extension = _file_selection_path.extension().u8string();
-					extension != ".ini" && extension != ".txt")
-					_file_selection_path = _file_selection_path.wstring() + L".ini";
-				if (file_type == std::filesystem::file_type::not_found)
-					condition = condition::create;
+				const std::filesystem::path &current_preset_path = _current_preset_path;
+				if (auto it = std::find_if(preset_paths.begin(), preset_paths.end(), [&ec, &current_preset_path](const std::filesystem::directory_entry &entry) { return std::filesystem::equivalent(entry, current_preset_path, ec); }); it == preset_paths.end())
+					if (condition == condition::backward)
+						_current_preset_path = _current_browse_path = preset_paths.back();
+					else
+						_current_preset_path = _current_browse_path = preset_paths.front();
 				else
-					condition = condition::select;
+					if (condition == condition::backward)
+						_current_preset_path = _current_browse_path = it == preset_paths.begin() ? preset_paths.back() : *--it;
+					else
+						_current_preset_path = _current_browse_path = it == preset_paths.end() - 1 ? preset_paths.front() : *++it;
 			}
 		}
 
-		std::filesystem::path directory_path;
-		if (std::filesystem::is_directory(_file_selection_path) || !_file_selection_path.has_parent_path())
-			directory_path = _file_selection_path;
-		else
-			directory_path = _file_selection_path.parent_path();
-
-		if (ImGui::SameLine(0, button_spacing); ImGui::Button("+", ImVec2(button_size, 0)))
-			_file_selection_path = directory_path, condition = condition::add;
-
-		if (ImGui::BeginChild("##paths", ImVec2(0, 300), true))
+		if (is_explore_open)
 		{
-			if (ImGui::Selectable(".."))
-			{
-				while (!std::filesystem::is_directory(_file_selection_path) && _file_selection_path.parent_path() != _file_selection_path)
-					_file_selection_path = _file_selection_path.parent_path();
-				_file_selection_path = _file_selection_path.parent_path();
-			}
+			if (ImGui::SameLine(0, button_spacing); ImGui::ButtonEx("+", ImVec2(button_size, 0), ImGuiButtonFlags_PressedOnClick | ImGuiButtonFlags_NoNavFocus))
+				if (const std::filesystem::file_type file_type = std::filesystem::status(reshade_container_path / _current_browse_path, ec).type(); ec.value() != 0x7b) // 0x7b: ERROR_INVALID_NAME
+					if (condition = condition::popup_add; file_type == std::filesystem::file_type::not_found || file_type != std::filesystem::file_type::directory)
+						_current_browse_path = _current_browse_path.parent_path();
 
-			std::error_code ec;
-			std::vector<std::filesystem::directory_entry> preset_files;
-			for (const auto &entry : std::filesystem::directory_iterator(directory_path, std::filesystem::directory_options::skip_permission_denied, ec))
+			if (ImGui::IsWindowAppearing() || condition == condition::backward || condition == condition::forward)
+				ImGui::SetNextWindowFocus();
+
+			if (ImGui::BeginChild("##paths", ImVec2(0, 300), true))
 			{
-				if (entry.is_directory(ec))
+				if (ImGui::Selectable(".."))
 				{
-					if (ImGui::Selectable((entry.path().filename().u8string() + '\\').c_str()))
-						_file_selection_path = entry;
+					for (_current_browse_path = std::filesystem::absolute(reshade_container_path / _current_browse_path);
+						!std::filesystem::is_directory(_current_browse_path, ec) && _current_browse_path.parent_path() != _current_browse_path;)
+						_current_browse_path = _current_browse_path.parent_path();
+					_current_browse_path = _current_browse_path.parent_path();
+
+					if (std::filesystem::equivalent(reshade_container_path, _current_browse_path))
+						_current_browse_path = L".";
+					else if (std::equal(reshade_container_path.begin(), reshade_container_path.end(), _current_browse_path.begin()))
+						_current_browse_path = _current_browse_path.lexically_proximate(reshade_container_path);
 				}
-				else
+
+				std::vector<std::filesystem::directory_entry> preset_paths;
+				for (const auto &entry : preset_container)
+					if (const std::filesystem::file_type file_type = entry.status(ec).type(); file_type == std::filesystem::file_type::directory)
+						if (ImGui::Selectable((entry.path().filename().u8string() + '\\').c_str()))
+							if (std::filesystem::equivalent(reshade_container_path, entry))
+								_current_browse_path = L".";
+							else if (std::equal(reshade_container_path.begin(), reshade_container_path.end(), entry.path().begin()))
+								_current_browse_path = entry.path().lexically_proximate(reshade_container_path);
+							else
+								_current_browse_path = entry;
+						else {}
+					else if (const std::wstring extension(entry.path().extension()); extension == L".ini" || extension == L".txt")
+						preset_paths.push_back(entry);
+
+				for (const auto &entry : preset_paths)
 				{
-					if (const std::string extension = entry.path().extension().u8string(); extension == ".ini" || extension == ".txt")
-						preset_files.push_back(entry);
+					const bool is_current_preset = std::filesystem::equivalent(entry, _current_preset_path, ec);
+
+					if (ImGui::Selectable(entry.path().filename().u8string().c_str(), static_cast<bool>(is_current_preset)))
+						condition = condition::select, _current_browse_path = entry.path().lexically_proximate(reshade_container_path);
+
+					if (is_current_preset)
+						if (_current_preset_is_covered && !ImGui::IsWindowAppearing())
+							_current_preset_is_covered = false, ImGui::SetScrollHereY();
+						else if (condition == condition::backward || condition == condition::forward)
+							ImGui::SetScrollHereY();
 				}
 			}
-			for (const auto &entry : preset_files)
-			{
-				if (ImGui::Selectable(entry.path().filename().u8string().c_str()))
-					_file_selection_path = entry, condition = condition::select;
-			}
+			ImGui::EndChild();
 		}
-		ImGui::EndChild();
 	}
 
 	if (condition == condition::select)
-		if (const reshade::ini_file preset(_file_selection_path); !preset.has("", "TechniqueSorting"))
-			condition = condition::none;
+		if (const reshade::ini_file preset(reshade_container_path / _current_browse_path); !preset.has("", "TechniqueSorting"))
+			condition = condition::pass;
 
-	if (condition == condition::add)
-		ImGui::OpenPopup("##name"), condition = condition::none;
+	if (condition == condition::popup_add)
+		condition = condition::pass, ImGui::OpenPopup("##name");
 
 	ImGui::SetNextWindowPos(cursor_pos + ImVec2(root_window_width + button_size - 230, button_size));
 	if (ImGui::BeginPopup("##name"))
 	{
+		if (ImGui::IsWindowAppearing())
+			ImGui::SetKeyboardFocusHere();
+
 		char filename[_MAX_PATH]{};
 		ImGui::InputText("Name", filename, sizeof(filename));
 
-		if (filename[0] != '\0' && ImGui::IsKeyPressedMap(ImGuiKey_Enter))
+		if (ImGui::IsKeyPressedMap(ImGuiKey_Enter))
 		{
-			if (std::filesystem::path relative_path = std::filesystem::u8path(filename);
-				relative_path.has_filename())
+			if (std::filesystem::path input_preset_path = std::filesystem::u8path(filename); input_preset_path.has_filename())
 			{
-				if (!relative_path.has_extension())
-					relative_path = relative_path.wstring() + L".ini";
-				std::filesystem::path file_selection_path = _file_selection_path / relative_path;
+				if (const std::wstring extension(input_preset_path.extension()); extension != L".ini" && extension != L".txt")
+					input_preset_path += L".ini";
+				if (const std::filesystem::file_type file_type = std::filesystem::status(reshade_container_path / _current_browse_path / input_preset_path, ec).type(); ec.value() == 0x7b) // 0x7b: ERROR_INVALID_NAME
+					condition = condition::pass;
+				else if (file_type == std::filesystem::file_type::directory)
+					condition = condition::pass;
+				else if (file_type == std::filesystem::file_type::not_found)
+					condition = condition::create;
+				else if (const reshade::ini_file preset(reshade_container_path / _current_browse_path / input_preset_path); preset.has("", "TechniqueSorting"))
+					condition = condition::select;
+				else
+					condition = condition::pass;
 
-				if (std::filesystem::file_type file_type = std::filesystem::status(file_selection_path).type();
-					file_type == std::filesystem::file_type::not_found)
-					condition = condition::add;
-				else if (file_type != std::filesystem::file_type::directory)
-					if (const reshade::ini_file preset(file_selection_path); preset.has("", "TechniqueSorting"))
-						condition = condition::add;
-
-				if (condition == condition::add)
-					_file_selection_path = file_selection_path;
+				if (condition != condition::pass)
+					_current_browse_path /= input_preset_path;
 			}
 		}
 
-		if (condition == condition::add)
+		if (condition != condition::pass)
 			ImGui::CloseCurrentPopup();
 
 		ImGui::EndPopup();
 	}
 
-	if (condition == condition::select || condition == condition::add || condition == condition::create)
+	if (condition != condition::pass)
 	{
-		_show_splash = true;
-		_current_preset_path = std::filesystem::absolute(_file_selection_path);
+		if (condition != condition::cancel)
+		{
+			_show_splash = true;
+			set_current_preset();
 
-		save_config();
-		load_current_preset();
-
-		if (popup_visible)
+			save_config();
+			load_current_preset();
+		}
+		if (is_explore_open && condition != condition::backward && condition != condition::forward)
 			ImGui::CloseCurrentPopup();
 	}
 
-	if (popup_visible)
+	if (is_explore_open)
 		ImGui::EndPopup();
+	else if (!_current_preset_is_covered)
+		_current_preset_is_covered = true;
 }
 
 #endif
