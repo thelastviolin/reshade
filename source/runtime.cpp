@@ -66,6 +66,8 @@ static std::vector<std::filesystem::path> find_files(const std::vector<std::file
 	return files;
 }
 
+unsigned int reshade::runtime::s_vr_system_ref_count = 0;
+
 reshade::runtime::runtime() :
 	_start_time(std::chrono::high_resolution_clock::now()),
 	_last_present_time(std::chrono::high_resolution_clock::now()),
@@ -108,8 +110,6 @@ reshade::runtime::~runtime()
 
 	assert(!_is_initialized && _techniques.empty());
 }
-
-unsigned int reshade::runtime::s_vr_system_ref_count = 0;
 
 bool reshade::runtime::on_init(input::window_handle window)
 {
@@ -1247,7 +1247,9 @@ void reshade::runtime::init_vr_system()
 	if (_is_vr_enabled && s_vr_system_ref_count++ == 0) 
 	{
 		vr::EVRInitError e = vr::VRInitError_None;
-
+			
+			
+		LOG(INFO) << "Attempting to initialize VR system";
 		vr::VR_Init(&e, vr::EVRApplicationType::VrApplication_Scene);
 
 		if (e != vr::VRInitError_None || !vr::VRCompositor())
@@ -1256,6 +1258,8 @@ void reshade::runtime::init_vr_system()
 
 			LOG(ERROR) << "Failed to initialize VR system with error code " << e << ".";
 		}
+
+		LOG(INFO) << "VR system initialized";
 	}
 }
 
@@ -1264,6 +1268,7 @@ void reshade::runtime::shutdown_vr_system()
 	if (s_vr_system_ref_count && --s_vr_system_ref_count == 0)
 	{
 		vr::VR_Shutdown();
+		LOG(INFO) << "VR system shutdown"
 	}
 }
 

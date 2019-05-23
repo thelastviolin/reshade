@@ -239,6 +239,7 @@ void reshade::opengl::runtime_opengl::on_present()
 				{ 0.5f, 0.0f, 1.0f, 1.0f }
 			};
 
+			LOG(INFO) << "Submt RenderBufferObject to VRCompositor"
 			vr::VRCompositor()->Submit(vr::Eye_Left, &submit_textures[0], &submit_bounds[0], vr::Submit_GlRenderBuffer);
 			vr::VRCompositor()->Submit(vr::Eye_Right, &submit_textures[1], &submit_bounds[1], vr::Submit_GlRenderBuffer);
 
